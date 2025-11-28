@@ -157,7 +157,15 @@ int msm_submitqueue_create(...) {
 
 ---
 
-## 📥 驱动安装 (Driver Installation)
+## � 开发分支 (Development Branch)
+
+我们在 GitLab 上维护了一个专门的开发分支，包含了针对 OnePlus 6/SD845 设备的完整补丁集合。欢迎大家参考、测试并贡献代码，让更多旧款设备能够焕发新生：
+
+- **开发分支地址**: [https://gitlab.com/nanasemai/linux/-/commits/nana/oneplus6-opencl](https://gitlab.com/nanasemai/linux/-/commits/nana/oneplus6-opencl)
+
+---
+
+## �📥 驱动安装 (Driver Installation)
 
 在应用内核补丁并刷入新内核后，您需要安装高通的闭源 OpenCL 驱动：
 
