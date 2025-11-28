@@ -161,7 +161,7 @@ After applying this patch, the following GPUs should theoretically be able to ru
 
 We maintain a dedicated development branch on GitLab containing the complete patch set for OnePlus 6/SD845 devices. Everyone is welcome to reference, test, and contribute code to breathe new life into more legacy devices:
 
-- **Development Branch URL**: [https://gitlab.com/nanasemai/linux/-/commits/nana/oneplus6-opencl](https://gitlab.com/nanasemai/linux/-/commits/nana/oneplus6-opencl)
+- **Development Branch URL**: [https://gitlab.com/nanasemai/linux/-/tree/nana/oneplus6-opencl](https://gitlab.com/nanasemai/linux/-/tree/nana/oneplus6-opencl)
 
 ---
 

@@ -161,7 +161,7 @@ int msm_submitqueue_create(...) {
 
 我们在 GitLab 上维护了一个专门的开发分支，包含了针对 OnePlus 6/SD845 设备的完整补丁集合。欢迎大家参考、测试并贡献代码，让更多旧款设备能够焕发新生：
 
-- **开发分支地址**: [https://gitlab.com/nanasemai/linux/-/commits/nana/oneplus6-opencl](https://gitlab.com/nanasemai/linux/-/commits/nana/oneplus6-opencl)
+- **开发分支地址**: [https://gitlab.com/nanasemai/linux/-/tree/nana/oneplus6-opencl](https://gitlab.com/nanasemai/linux/-/tree/nana/oneplus6-opencl)
 
 ---
 
