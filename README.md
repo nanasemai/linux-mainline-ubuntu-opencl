@@ -2,6 +2,12 @@
 
 **让旧款骁龙设备（如 OnePlus 6/SD845）运行最新的高通闭源 OpenCL/Vulkan 驱动。**
 
+## 🌐 语言选择 (Language Selection)
+- [中文 (Chinese)](README.md)
+- [English](README_EN.md)
+
+---
+
 ## 📖 简介 (Introduction)
 
 随着高通发布新一代 SoC，配套的闭源图形驱动（KGSL/DRM user-space driver）也在不断更新，带来了更好的 OpenCL 性能和 Vulkan 兼容性。然而，这些新驱动往往包含**白名单限制**，甚至使用了旧内核不支持的**高级调度特性**。
@@ -28,8 +34,14 @@
 *   **策略**：拦截 `MSM_PARAM_PRIORITIES`，强制告诉驱动：“我只支持 1 个优先级”。
 *   **效果**：驱动被迫降级运行在兼容模式（Queue ID 0），解决了所有同步和死锁问题。
 
-### 3. 静默降级 (Silent Downgrade)
-作为安全网，如果驱动强行请求高优先级，内核不再返回错误（`-EINVAL`），而是悄悄将其降级为默认优先级。
+### 3. 有限降级 (Limited Downgrade)
+经过大量测试，我们发现简单的"静默降级"会导致驱动"过度成功" - 它会认为设备支持所有请求的优先级，然后尝试启用旧内核不支持的高级调度功能，最终导致初始化失败。
+
+*   **优化策略**：精确模拟成功案例的行为模式。
+*   **核心逻辑**：
+    *   允许 `Prio 1`：将其悄悄降级为默认优先级（Ring 0）。
+    *   拒绝 `Prio 2+`：明确返回错误（`-EINVAL`）。
+*   **效果**：驱动探测到 `Prio 1` 成功、`Prio 2` 失败后，会停止贪婪探测，稳定工作在 `Prio 1` 模式。
 
 ---
 
@@ -111,10 +123,18 @@ int msm_submitqueue_create(...) {
         return -EINVAL;
     */
 
-    /* NEW CODE: Silent Downgrade */
-    /* If requested priority is too high, force it to default (0) */
+    /* NEW CODE: Limited Downgrade (模仿成功案例的行为) */
     if (prio >= priv->gpu->nr_rings) {
-        prio = 0;
+        /* 
+         * 策略：
+         * 1. 允许 Prio 1（映射到 Ring 0），因为驱动似乎强制需要至少一个非0优先级。
+         * 2. 拒绝 Prio 2 及以上。这会迫使驱动停止贪婪探测，接受当前的配置。
+         */
+        if (prio == 1) {
+            prio = 0; /* 允许 Prio 1，悄悄降级到 0 */
+        } else {
+            return -EINVAL; /* 拒绝 Prio 2, 3, 4, 5 */
+        }
     }
 
     /* ... continue execution ... */
@@ -137,13 +157,64 @@ int msm_submitqueue_create(...) {
 
 ---
 
+## 📥 驱动安装 (Driver Installation)
+
+在应用内核补丁并刷入新内核后，您需要安装高通的闭源 OpenCL 驱动：
+
+```bash
+# 添加 Ubuntu QCom PPA 源
+echo 'deb [signed-by=/usr/share/keyrings/qcom-noble.gpg] https://ppa.launchpadcontent.net/ubuntu-qcom-iot/qcom-ppa/ubuntu noble main
+deb-src [signed-by=/usr/share/keyrings/qcom-noble.gpg] https://ppa.launchpadcontent.net/ubuntu-qcom-iot/qcom-ppa/ubuntu noble main' | sudo tee /etc/apt/sources.list.d/qcom.list
+
+# 设置 PPA 优先级
+sudo tee /etc/apt/preferences.d/qcom-ppa-priority > /dev/null <<'EOF'
+Package: *
+Pin: origin ppa.launchpadcontent.net
+Pin-Priority: 1004
+
+Package: qcom-adreno-cl-dev qcom-adreno-cl1
+Pin: origin ppa.launchpadcontent.net
+Pin-Priority: 1005
+EOF
+
+# 导入 GPG 密钥
+sudo mkdir -p /usr/share/keyrings
+sudo curl -fsSL 'https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x33EF0ACBC6FE252590ABBAF21C70EB0C444248D7' | sudo gpg --dearmor -o /usr/share/keyrings/qcom-noble.gpg
+
+# 更新并安装驱动包
+sudo apt update
+sudo apt install -y qcom-adreno-cl-dev qcom-adreno-cl1 clinfo strace
+
+# 创建 OpenCL 供应商配置
+sudo mkdir -p /etc/OpenCL/vendors
+
+sudo tee /etc/OpenCL/vendors/qcom.icd > /dev/null << EOF
+/usr/lib/aarch64-linux-gnu/libOpenCL_adreno.so.1
+EOF
+
+# 设置环境变量
+sudo tee /etc/profile.d/opencl.sh > /dev/null << EOF
+#!/bin/bash
+export OPENCL_VENDOR_PATH=/etc/OpenCL/vendors
+export LD_LIBRARY_PATH=\$LD_LIBRARY_PATH:/usr/lib/aarch64-linux-gnu
+export LIBGL_DRIVERS_PATH=/usr/lib/aarch64-linux-gnu/dri
+EOF
+
+# 应用配置
+sudo chmod +x /etc/profile.d/opencl.sh
+sudo usermod -a -G video $USER
+sudo usermod -a -G render $USER
+source /etc/profile.d/opencl.sh
+```
+
 ## 🧪 验证 (Verification)
 
-编译并刷入新内核后，使用 `clinfo` 和 OpenCL 计算测试工具进行验证。
+安装驱动后，使用 `clinfo` 和 OpenCL 计算测试工具进行验证。
 
-1.  **clinfo**: 应该能正确显示 Platform Name (QUALCOMM Snapdragon) 和 Device Name (Adreno 630)，且频率显示正常。
+1.  **clinfo**: 应该能正确显示 Platform Name (QUALCOMM Snapdragon) 和 Device Name (Adreno 630)，且频率显示正常（不是 1MHz）。
 2.  **clpeak**: 应该能跑完所有测试，且 `Kernel launch latency` 不为 0（虽然分数可能依然虚高，这取决于驱动内部计时器）。
-3.  **实际计算**: 运行简单的向量加法代码，结果应正确。
+3.  **实际计算**: 运行简单的向量加法代码，结果应正确（不是全0）。
+4.  **驱动日志分析**: 查看系统日志，确认驱动在探测到 `Prio 2` 返回错误后停止探测，而不是继续尝试 `Prio 3-5`。
 
 ## ⚠️ 免责声明 (Disclaimer)
 
@@ -154,4 +225,6 @@ int msm_submitqueue_create(...) {
 ---
 
 **Credits:**
-Research & Debugging by [nanasemai] & DeepSeek AI.
+Research, Debugging & Implementation by [nanasemai] & DeepSeek AI.
+
+**特别感谢:** 所有参与测试和提供反馈的开发者，正是你们的贡献让这个解决方案更加完善。
