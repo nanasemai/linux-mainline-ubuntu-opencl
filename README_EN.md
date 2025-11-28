@@ -225,6 +225,6 @@ After installing the drivers, verify using `clinfo` and OpenCL computation test 
 ---
 
 **Credits:**
-Research, Debugging & Implementation by [nanasemai] & DeepSeek AI.
+Research, Debugging & Implementation by [nanasemai] & [0312birdzhang] & DeepSeek AI & ChatGPT AI & ChatGPT AI & Gemini AI.
 
 **Special thanks:** To all developers who participated in testing and provided feedback. Your contributions have made this solution more robust.

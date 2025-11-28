@@ -225,6 +225,6 @@ source /etc/profile.d/opencl.sh
 ---
 
 **Credits:**
-Research, Debugging & Implementation by [nanasemai] & DeepSeek AI.
+Research, Debugging & Implementation by [nanasemai] & [0312birdzhang] & DeepSeek AI & ChatGPT AI & ChatGPT AI & Gemini AI.
 
 **特别感谢:** 所有参与测试和提供反馈的开发者，正是你们的贡献让这个解决方案更加完善。
