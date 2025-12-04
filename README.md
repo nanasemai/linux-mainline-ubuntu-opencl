@@ -47,99 +47,179 @@
 
 ## 🛠️ 修改指南 (Patch Guide)
 
-你需要修改手机/设备内核源码中的两个文件。
+当前内核源码中已经实现了完整的 Adreno 6xx 兼容性补丁。以下是实际修改的详细说明：
 
-### 文件 1: `drivers/gpu/drm/msm/adreno/adreno_gpu.c` (或 `msm_drv.c`)
+### 文件 1: `drivers/gpu/drm/msm/adreno/adreno_gpu.c`
 
-找到 `adreno_get_param` 函数（部分旧内核为 `msm_ioctl_get_param`），修改以下 `case` 逻辑：
+**实际修改内容：**
 
+#### 1. CHIP ID 映射 (MSM_PARAM_CHIP_ID)
 ```c
-/* ==================================================================
- *  Replace logic in adreno_get_param / msm_ioctl_get_param
- * ================================================================== */
-
 case MSM_PARAM_CHIP_ID: {
-    uint32_t raw_id = adreno_gpu->chip_id; // Or gpu->chip_id
+    uint32_t raw_id = adreno_gpu->chip_id;
     
-    /* --- Adreno 6xx Compatibility Map --- */
-    
-    /* Adreno 630 (SD845): Map Rev 2/3 to v1 */
+    /* -----------------------------------------------------------
+     * Adreno 6xx 全系列白名单映射 (基于实际测试结果)
+     * 原则：将所有不支持的 Rev/Lite/Plus 版本映射回测试通过的 Base 版本
+     * ----------------------------------------------------------- */
+
+    /* [Group 1] Adreno 630 (SD 845) - 你的设备在这里 */
+    /* 你的原生 ID 是 0x06030002 (REJECT)，映射到 0x06030001 (PASS) */
     if ((raw_id & 0xFFFF0000) == 0x06030000) {
-        *value = 0x06030001; 
+        *value = 0x06030001; /* 强制映射为 A630 v1 */
     }
-    /* Adreno 640 (SD855): Map all variants to v1 */
+    /* [Group 2] Adreno 640 / 64x (SD 855 / 778G / 780G) */
     else if ((raw_id & 0xFFFF0000) == 0x06040000) {
-        *value = 0x06040001; 
+        *value = 0x06040001; /* 强制映射为 A640 v1 (最稳的 A64x) */
     }
-    /* Adreno 650 (SD865): Map 865+ to v2 */
+    /* [Group 3] Adreno 650 (SD 865) */
     else if ((raw_id & 0xFFFF0000) == 0x06050000) {
-        *value = 0x06050002; 
+        *value = 0x06050002; /* 强制映射为 A650 v2 */
     }
-    /* Adreno 660 (SD888): Map v2 to v1 */
+    /* [Group 4] Adreno 660 / 66x (SD 888 / 7 Gen 1) */
     else if ((raw_id & 0xFFFFFF00) == 0x06060000) {
-        *value = 0x06060001; 
+        *value = 0x06060001; /* A660 v2 -> v1 */
     }
-    /* Fallback: Keep original ID */
+    else if (raw_id == 0x06060301) {
+        *value = 0x06060201; /* A663 -> A662 (PASS) */
+    }
+    /* 其他 Adreno 61x/62x/68x 系列的映射... */
     else {
-        *value = raw_id;
+        *value = raw_id; /* 默认保持原样 */
     }
     
-    /* Append speedbin if necessary */
     if (!adreno_gpu->info->revn)
         *value |= ((uint64_t) adreno_gpu->speedbin) << 32;
     return 0;
 }
+```
 
+#### 2. 优先级设置 (MSM_PARAM_PRIORITIES)
+```c
 case MSM_PARAM_PRIORITIES:
-    /* 
-     * CRITICAL FIX: Force Single Priority.
-     * Prevents driver form requesting multiple hardware rings, 
-     * solving the "submit success but result is 0" sync issue.
+    /*
+     * 【A630优化方案】根据A630硬件特性，适度放宽优先级限制
+     * A630支持抢占式调度，但过度限制会导致UI卡顿
+     * 采用渐进式策略：支持2个优先级，保留基本调度能力
      */
-    *value = 1;
-    return 0;
-
-case MSM_PARAM_MAX_FREQ:
-    *value = adreno_gpu->base.fast_rate;
-    /* Cosmetic fix for clinfo showing 1MHz */
-    if (*value < 1000000) *value = 710000000; 
+    *value = 2;
     return 0;
 ```
+
+#### 3. 频率显示优化 (MSM_PARAM_MAX_FREQ)
+```c
+case MSM_PARAM_MAX_FREQ: {
+    *value = adreno_gpu->base.fast_rate;
+    /* 修复 clinfo 显示 1MHz 的问题，根据芯片 ID 返回更准确的官方最大频率 */
+    if (*value < 1000000) {
+        uint32_t chip_id = adreno_gpu->chip_id;
+        uint64_t spoof_freq;
+        
+        /* 根据频率速查表，返回更准确的官方最大频率 */
+        if ((chip_id & 0xFFFF0000) == 0x06030000) {
+            spoof_freq = 710000000; /* A630 (SD845): 710 MHz */
+        } else if ((chip_id & 0xFFFF0000) == 0x06040000) {
+            spoof_freq = 585000000; /* A640 (SD855): 585 MHz */
+        } else if ((chip_id & 0xFFFF0000) == 0x06050000) {
+            spoof_freq = 587000000; /* A650 (SD865): 587 MHz */
+        } else if ((chip_id & 0xFFFFFF00) == 0x06060000) {
+            spoof_freq = 840000000; /* A660 (SD888): 840 MHz */
+        } else {
+            spoof_freq = 800000000; /* 保底频率：800 MHz */
+        }
+        
+        *value = spoof_freq;
+    }
+    return 0;
+}
+```
+
+### 文件 1: `drivers/gpu/drm/msm/msm_drv.c`
+
+**实际修改内容：**
+
+#### IOCTL 参数处理函数
+```c
+static int msm_ioctl_get_param(struct drm_device *dev, void *data,
+                struct drm_file *file)
+{
+    struct msm_drm_private *priv = dev->dev_private;
+    struct drm_msm_param *args = data;
+    struct msm_gpu *gpu = priv->gpu_pipe[MSM_PIPE_3D0];
+    
+    /* 将参数获取请求转发给 GPU 驱动的 adreno_get_param 函数 */
+    if (gpu && gpu->funcs->get_param)
+        return gpu->funcs->get_param(gpu, args->pipe, args->param, &args->value);
+    
+    return -EINVAL;
+}
+```
+
+**说明：** msm_drv.c 中的 `msm_ioctl_get_param` 函数作为 IOCTL 接口，将用户空间的参数请求转发给 GPU 驱动的具体实现。这是整个补丁机制的关键桥梁。
 
 ### 文件 2: `drivers/gpu/drm/msm/msm_submitqueue.c`
 
-找到 `msm_submitqueue_create` 函数，修改优先级检查逻辑：
+**实际修改内容：**
 
+#### 智能优先级降级策略
 ```c
-/* ==================================================================
- *  Modify msm_submitqueue_create
- * ================================================================== */
-
-int msm_submitqueue_create(...) {
-    /* ... code ... */
-
-    /* ORIGINAL CODE:
-    if (prio >= gpu->nr_rings)
-        return -EINVAL;
-    */
-
-    /* NEW CODE: Limited Downgrade (模仿成功案例的行为) */
-    if (prio >= priv->gpu->nr_rings) {
-        /* 
-         * 策略：
-         * 1. 允许 Prio 1（映射到 Ring 0），因为驱动似乎强制需要至少一个非0优先级。
-         * 2. 拒绝 Prio 2 及以上。这会迫使驱动停止贪婪探测，接受当前的配置。
+static struct msm_submitqueue *msm_submitqueue_create(struct drm_device *ddev,
+        struct msm_file_private *ctx, u32 prio, u32 flags, u32 id)
+{
+    struct msm_drm_private *priv = ddev->dev_private;
+    struct msm_submitqueue *queue;
+    
+    /* ==================================================================
+     * 【A630 智能优先级降级优化】
+     * 针对 A630 硬件特性，实现更精细的优先级管理
+     * ================================================================== */
+    
+    /* 检查是否为 A630 GPU */
+    if (priv->gpu && adreno_is_a630(priv->gpu)) {
+        /*
+         * A630 硬件支持 2 个优先级，但需要合理分配：
+         * - Prio 0: 保留给高优先级任务（如 UI 渲染）
+         * - Prio 1: 降级到 Ring 0（普通任务）
+         * - Prio 2+: 智能降级到可用 Ring（避免硬件资源耗尽）
          */
-        if (prio == 1) {
-            prio = 0; /* 允许 Prio 1，悄悄降级到 0 */
-        } else {
-            return -EINVAL; /* 拒绝 Prio 2, 3, 4, 5 */
+        
+        /* Prio 0: 保持原样，用于高优先级任务 */
+        if (prio == 0) {
+            /* 保持 Prio 0 不变，确保高优先级任务正常运行 */
+        }
+        /* Prio 1: 降级到 Ring 0 */
+        else if (prio == 1) {
+            prio = 0;  /* 降级到 Ring 0，避免硬件限制 */
+        }
+        /* Prio 2+: 采用循环分配策略 */
+        else {
+            /* 智能降级：过高优先级采用循环分配，避免超出硬件限制 */
+            prio = (prio - 2) % priv->gpu->nr_rings;
         }
     }
-
-    /* ... continue execution ... */
+    
+    /* 原有的优先级检查逻辑保持不变 */
+    if (prio >= priv->gpu->nr_rings)
+        return ERR_PTR(-EINVAL);
+    
+    /* 后续的队列创建逻辑保持不变 */
+    queue = kzalloc(sizeof(*queue), GFP_KERNEL);
+    if (!queue)
+        return ERR_PTR(-ENOMEM);
+    
+    kref_init(&queue->ref);
+    queue->id = id;
+    queue->flags = flags;
+    queue->prio = prio;
+    queue->ctx = ctx;
+    
+    /* ... 其他初始化代码 ... */
+    
+    return queue;
 }
 ```
+
+**说明：** 这个修改实现了"智能优先级降级"策略，针对 A630 的硬件限制进行优化，确保在支持基本调度能力的同时避免硬件资源耗尽。
 
 ---
 
@@ -229,6 +309,37 @@ source /etc/profile.d/opencl.sh
 *   此修改涉及内核底层，刷机有风险，请务必备份数据。
 *   我们不保证所有闭源驱动都能完美运行，这取决于驱动具体的编译版本和对硬件指令集的依赖。
 *   强制降级优先级可能会轻微影响系统在高负载下的多任务 UI 响应速度（但在游戏/计算独占场景下无影响）。
+
+---
+
+## 📋 实际修改总结
+
+基于对当前内核源码的详细分析，文档已修正为准确反映实际修改情况：
+
+### 🔧 已实现的核心修改
+
+#### 1. `adreno_gpu.c` - 核心补丁实现
+- **CHIP ID 映射**：将不支持的 GPU 版本（如 A630 的 0x06030002）映射到兼容的基准版本（0x06030001）
+- **优先级优化**：针对 A630 硬件特性，支持 2 个优先级以保留基本调度能力（而非原文档中的 1 个）
+- **频率显示修复**：根据芯片 ID 返回准确的官方最大频率（如 A630 的 710 MHz）
+
+#### 2. `msm_drv.c` - IOCTL 接口桥梁
+- `msm_ioctl_get_param` 函数作为用户空间与 GPU 驱动的通信桥梁
+- 将参数获取请求转发给 `adreno_get_param` 函数进行实际处理
+
+#### 3. `msm_submitqueue.c` - 智能优先级管理
+- 实现 A630 智能优先级降级策略：
+  - Prio 0：保留给高优先级任务
+  - Prio 1：降级到 Ring 0
+  - Prio 2+：采用循环分配策略避免硬件资源耗尽
+
+### 🔄 重要修正说明
+- **优先级设置**：实际代码支持 2 个优先级，而非原文档中的 1 个
+- **CHIP ID 映射**：针对 A630 的具体映射关系已明确说明
+- **频率修复**：增加了基于芯片 ID 的频率速查表
+- **智能降级**：详细描述了 A630 的优先级管理策略
+
+这些修改共同解决了旧款骁龙设备运行最新高通闭源 OpenCL/Vulkan 驱动的兼容性问题。
 
 ---
 
